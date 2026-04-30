@@ -1,0 +1,61 @@
+[project]
+name = "LaneDetCarla"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.10.20"
+dependencies = [
+    "albucore>=0.1.6",
+    "albumentations==0.4.6",
+    "carla==0.9.16",
+    "cloudpickle>=3.1.2",
+    "einops>=0.8.2",
+    "fvcore>=0.1.5.post20221221",
+    "imgaug==0.4.0",
+    "omegaconf>=2.3.0",
+    "p-tqdm>=1.4.2",
+    "pandas>=2.3.3",
+    "pygame>=2.6.1",
+    "scikit-image>=0.25.2",
+    "scikit-learn>=1.7.2",
+    "setuptools==66.1.1",
+    "shapely>=2.1.2",
+    "tensorboard>=2.20.0",
+    "timm>=1.0.26",
+    "wheel==0.46.3",
+]
+# Specific versions of torch, torchvision, and torchaudio are installed based on the extra feature
+[project.optional-dependencies]
+cpu = ["torch==2.3.1", "torchvision==0.18.1", "torchaudio==2.3.1"]
+cu121 = ["torch==2.3.1", "torchvision==0.18.1", "torchaudio==2.3.1"]
+
+[tool.uv]
+# The cpu and cu121 extras are mutually exclusive, you can't use both at the same time
+conflicts = [[{ extra = "cpu" }, { extra = "cu121" }]]
+
+[tool.uv.sources]
+# The torch, torchvision, and torchaudio packages are installed from the pytorch-cpu and pytorch-cu121 indexes
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu121", extra = "cu121" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu121", extra = "cu121" },
+]
+torchaudio = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu121", extra = "cu121" },
+]
+
+
+[[tool.uv.index]]
+# The pytorch-cpu index is used to install the torch, torchvision, and torchaudio packages
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true

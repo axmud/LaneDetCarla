@@ -1,0 +1,2 @@
+releases/Tusimple/CLRNet/ResNet34_CVPR.pth filter=lfs diff=lfs merge=lfs -text
+carla_data.csv filter=lfs diff=lfs merge=lfs -text
