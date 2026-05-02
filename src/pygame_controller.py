@@ -10,12 +10,12 @@ from collections import deque
 client = carla.Client('localhost', 2000)
 client.set_timeout(10.0)
 world = client.load_world('Town06')
-
+delta_seconds = 0.05  # 20 Hz
 # Set up the simulator in synchronous mode
 settings = world.get_settings()
 settings.synchronous_mode = True        # Enables synchronous mode
 settings.no_rendering_mode = True       # We render with PyGame, disable sim rendering
-settings.fixed_delta_seconds = 0.05     # 20 Hz
+settings.fixed_delta_seconds = delta_seconds     # 20 Hz
 world.apply_settings(settings)
 
 # Set up the TM in synchronous mode
@@ -149,7 +149,7 @@ class PIDLateralController:
     Output is clipped to [-1, 1] (CARLA's steering range).
     """
 
-    def __init__(self, K_P=0.5, K_I=0.01, K_D=0.1, dt=0.05):
+    def __init__(self, K_P=0.5, K_I=0.01, K_D=0.1, dt=delta_seconds):
         self._K_P = K_P
         self._K_I = K_I
         self._K_D = K_D
@@ -183,7 +183,7 @@ class PIDLongitudinalController:
     negative -> brake.
     """
 
-    def __init__(self, K_P=0.3, K_I=0.05, K_D=0.0, dt=0.05):
+    def __init__(self, K_P=0.3, K_I=0.05, K_D=0.0, dt=delta_seconds):
         self._K_P = K_P
         self._K_I = K_I
         self._K_D = K_D
@@ -219,9 +219,9 @@ class VehiclePIDController:
                  max_throttle=0.75, max_brake=0.3, max_steering=0.8):
 
         if args_lateral is None:
-            args_lateral = {'K_P': 0.2680, 'K_I': 0.1340, 'K_D': 0.1786, 'dt': 0.05}
+            args_lateral = {'K_P': 0.2680, 'K_I': 0.1340, 'K_D': 0.1786, 'dt': delta_seconds}
         if args_longitudinal is None:
-            args_longitudinal = {'K_P': 0.0953, 'K_I': 0.0524, 'K_D': 0.0000, 'dt': 0.05}
+            args_longitudinal = {'K_P': 0.0953, 'K_I': 0.0524, 'K_D': 0.0000, 'dt': delta_seconds}
 
         self._vehicle = vehicle
         self._max_throt = max_throttle
@@ -270,6 +270,39 @@ class VehiclePIDController:
 
         self.past_steering = steering
         return control
+
+
+
+class TrajectoryLogger:
+    def __init__(self, enabled=True, output_path="ego_trajectory.csv"):
+        self.enabled = enabled
+        self.output_path = output_path
+        self._rows = []
+
+    def log(self, **fields):
+        if not self.enabled:
+            return
+        self._rows.append(fields)
+
+    def toggle(self):
+        self.enabled = not self.enabled
+        print(f"[LOG] {'ENABLED' if self.enabled else 'DISABLED'} "
+              f"({len(self._rows)} samples buffered)")
+
+    def set_output_path(self, path):
+        self.output_path = path
+        print(f"[LOG] Output path -> {path}")
+
+    def save(self):
+        if not self._rows:
+            print("[LOG] Nothing to save.")
+            return
+        df = pd.DataFrame(self._rows)
+        df.to_csv(self.output_path, index=False)
+        print(f"[LOG] Saved {len(df)} samples to {self.output_path}")
+
+    def clear(self):
+        self._rows.clear()
 
 
 # =============================================================================
@@ -381,10 +414,17 @@ camera.listen(lambda image: pygame_callback(image, renderObject))
 # -----------------------------------------------------------------------------
 TARGET_SPEED = 30.0  # km/h
 
+# =============================================================================
+# Trajectory logging config
+# =============================================================================
+LOG_TRAJECTORY     = False                   # master on/off switch
+LOG_OUTPUT_PATH    = "src/ego_trajectory_in_pid_lane_shift.csv"
+LOG_TOGGLE_KEY     = pygame.K_l             # press 'L' in the PyGame window
+
 vehicle_pid = VehiclePIDController(
     ego_vehicle,
-    args_lateral={'K_P': 0.2494, 'K_I': 0.1247, 'K_D': 0.1662, 'dt': 0.05},
-    args_longitudinal={'K_P': 0.3143, 'K_I': 0.1571, 'K_D': 0.0000, 'dt': 0.05},
+    args_lateral={'K_P': 0.2494, 'K_I': 0.1247, 'K_D': 0.1662, 'dt': delta_seconds},
+    args_longitudinal={'K_P': 0.3143, 'K_I': 0.1571, 'K_D': 0.0000, 'dt': delta_seconds},
     max_throttle=0.75,
     max_brake=0.3,
     max_steering=0.8,
@@ -409,6 +449,9 @@ wp_y_arr  = data["waypoint_y"].to_numpy()
 vec_x_arr = data["vector_x"].to_numpy()
 vec_y_arr = data["vector_y"].to_numpy()
 
+
+logger = TrajectoryLogger(enabled=LOG_TRAJECTORY, output_path=LOG_OUTPUT_PATH)
+
 # =============================================================================
 # Main loop
 # =============================================================================
@@ -418,6 +461,32 @@ while not crashed:
 
     # --- Lateral error + PID control -----------------------------------------
     lane_shift, nearest_dist = lane_shift_calculator(ego_vehicle)
+
+    # --- Log ego trajectory --------------------------------------------------
+    loc = ego_vehicle.get_transform().location
+    rot = ego_vehicle.get_transform().rotation
+    vel = ego_vehicle.get_velocity()
+    applied = ego_vehicle.get_control()
+    snap = world.get_snapshot()
+
+    logger.log(
+        frame        = snap.frame,
+        time_s       = snap.timestamp.elapsed_seconds,
+        x            = loc.x,
+        y            = loc.y,
+        z            = loc.z,
+        yaw_deg      = rot.yaw,
+        speed_kmh    = 3.6 * math.sqrt(vel.x**2 + vel.y**2 + vel.z**2),
+        lane_shift   = lane_shift,
+        nearest_dist = nearest_dist,
+        ref_index    = index,
+        ref_x        = float(wp_x_arr[index]),
+        ref_y        = float(wp_y_arr[index]),
+        steer        = applied.steer,
+        throttle     = applied.throttle,
+        brake        = applied.brake,
+    )
+
     if index == 1308:
         crashed = True
     print(f"Lane shift: {lane_shift:+.2f} m, Nearest dist to waypoint: {nearest_dist:.2f} m", "Index:", index)
@@ -447,6 +516,9 @@ while not crashed:
                 pid_enabled = not pid_enabled
                 print(f"[PID] {'ENABLED' if pid_enabled else 'DISABLED (manual)'}")
 
+            # 'L' toggles trajectory logging on/off
+            if event.key == LOG_TOGGLE_KEY:
+                logger.toggle()
             # TAB switches to a new ego vehicle
             if event.key == pygame.K_TAB:
                 # Hand old ego back to TM
@@ -477,3 +549,4 @@ while not crashed:
 # =============================================================================
 camera.stop()
 pygame.quit()
+logger.save()

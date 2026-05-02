@@ -5,3 +5,15 @@ There are bunch of code files in here. ```helper.py``` is essential for detectin
 ```cmd
 python pid_tuning.py --lon sysid_longitudinal.csv --lat sysid_lateral.csv --meta sysid_meta.csv --wn-lat 1.5 --wn-lon 1.0 --target-speed 30
 ```
+
+you can check the results in carla itself using this command:
+
+```cmd
+python src\draw_trajectory_in_carla.py --log src\ego_trajectory_in_pid_lane_shift.csv
+```
+
+or if you want to plot it:
+
+```cmd
+python src\plot_trajectory.py --logs src\ego_trajectory_in_pid_lane_shift.csv
+```
