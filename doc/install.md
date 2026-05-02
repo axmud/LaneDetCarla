@@ -1,58 +1,82 @@
-## Installation step
-<font size=4> In this documentation, we introduce the installation step by step. 
+# Installation
 
-**Important: UnLanedet only supports the Linux!**
+## Required Preinstallers
 
-### Docker installation (recommendation)
-<font size=4>1. Pull the Pytorch docker image.
+To install this project correctly, we need to have **NVIDIA CUDA Toolkit 12.1** and **Microsoft Visual Studio Build Tools 2022 with CUDA toolkit (ver:12.1) [MSVC v143 - VS 2022 C++ x64/86 build tools (v14.39-17.9)]** should be pre-installed on windows PC.
 
-<font size=3>
+## Environment Setup
 
-```Shell
-docker pull pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel
+```cmd
+set PROJECT=LaneDetCarla
+
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.10.8/install.ps1 | iex"
+
+git clone https://github.com/axmud/LaneDetCarla.git %PROJECT%
+
+cd %PROJECT%
+
+uv venv
+
+.venv\Scripts\activate
+
+uv pip install setuptools==66.1.1
+
+uv pip install wheel==0.46.3
+
+uv pip install albumentations==0.4.6 --no-build-isolation
+
+uv sync --extra cu121
+
+uv pip install --no-build-isolation -e .
+
+uv pip install numpy==1.23.1
+
+uv pip install hydra-core==1.3.2
+
 ```
 
-<font size=4>2. Create the container
+for all release download:
 
-<font size=3>
+```cmd
+mkdir releases\Tusimple\SCNN
+curl -L -o releases\Tusimple\SCNN\ResNet18_AAAI.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/scnn_model_best_tusimple.pth
 
-```Shell
-docker create --gpus all --name ldet -v $PWD:/home --shm-size 20G --network=host -it pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel /bin/bash
+mkdir releases\Tusimple\RESA
+curl -L -o releases\Tusimple\RESA\ResNet18_AAAI.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/resa_model_best_tusimple.pth
 
-docker start ldet
+mkdir releases\Tusimple\UFLD
+curl -L -o releases\Tusimple\UFLD\ResNet18_ECCV.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/ufld_model_best_tusimple.pth
 
-docker exec -it ldet bash
+mkdir releases\Tusimple\LaneATT
+curl -L -o releases\Tusimple\LaneATT\ResNet34_CVPR.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/laneatt_model_best_tusimple.pth
+
+mkdir releases\Tusimple\ADNet
+curl -L -o releases\Tusimple\ADNet\ResNet34_ICCV.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/adnet_model_best_tusimple.pth
+
+mkdir releases\Tusimple\SRLane
+curl -L -o releases\Tusimple\SRLane\ResNet34_AAAI.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/srnet_r34_tusimple_model_best.pth
+
+mkdir releases\Tusimple\BezierNet
+curl -L -o releases\Tusimple\BezierNet\ResNet18_CVPR.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/beizernet_model_best.pth
+
+mkdir releases\Tusimple\GANet
+curl -L -o releases\Tusimple\GANet\ResNet18_CVPR.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/ganet_r18_tusimple_model_best.pth
+
+mkdir releases\Tusimple\GSENet
+curl -L -o releases\Tusimple\GSENet\ResNet18_AAAI.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/gsenet_r18_tusimple.pth
+
+mkdir releases\CULane\CLRNet
+curl -L -o releases\CULane\CLRNet\ResNet34_CVPR.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/clrnet_r50_culane_model_best.pth
+curl -L -o releases\CULane\CLRNet\ResNet50_CVPR.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/clrnet_model_best_culane.pth
+curl -L -o releases\CULane\CLRNet\ConvNexT-Tiny_CVPR.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/clrnet_convnext_culane.pth
+
+mkdir releases\CULane\CLRerNet
+curl -L -o releases\CULane\CLRerNet\ResNet34_WACV.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/clrernet_model_best_culane.pth
+curl -L -o releases\CULane\CLRerNet\ConvNexT-Tiny_WACV.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/clrernet_convnext_culane.pth
+
+mkdir releases\CULane\ADNet
+curl -L -o releases\CULane\ADNet\ResNet34_ICCV.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/adnet_model_best_culane.pth
+
+mkdir releases\VIL100\ADNet
+curl -L -o releases\VIL100\ADNet\ResNet34_ICCV.pth https://github.com/zkyntu/UnLanedet/releases/download/Weights/adnet_model_final_vil100.pth
 ```
-
-<font size=4>3. Install the requirements
-
-<font size=3>
-
-```Shell
-# git clone https://github.com/zkyntu/UnLanedet.git
-cd /home/UnLanedet
-pip install -r requirements.txt
-pip install numpy==1.23.1
-pip install hydra-core --upgrade
-python setup.py build develop
-```
-
-<font size=4>4. (Optional) If you want to use the distributed training, please fix bugs in imgaug library following [issues](https://github.com/yu4u/age-estimation-pytorch/issues/21#issuecomment-1244821328).
-
-
-### Conda Installation
-<font size=3>
-
-```Shell
-# git clone https://github.com/zkyntu/UnLanedet.git
-conda create -n unlanedet python=3.9 -y
-conda activate unlanedet
-conda install pytorch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 pytorch-cuda=12.1 -c pytorch -c nvidia
-cd UnLanedet
-pip install -r requirements.txt
-pip install numpy==1.23.1
-pip install hydra-core --upgrade
-python setup.py build develop
-```
-
-**Note**: If numpy==1.23.1 is unable to be installed, you should replace np.bool with bool in numpy>=1.23.x manually.

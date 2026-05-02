@@ -1,0 +1,7 @@
+key,value
+vehicle,vehicle.nissan.patrol
+wheelbase_m,2.83850039153628
+dt_s,0.05
+lon_throttle_step,0.5
+lat_target_speed_kmh,30.0
+lat_steer_step,0.05

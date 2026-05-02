@@ -219,9 +219,9 @@ class VehiclePIDController:
                  max_throttle=0.75, max_brake=0.3, max_steering=0.8):
 
         if args_lateral is None:
-            args_lateral = {'K_P': 0.5, 'K_I': 0.01, 'K_D': 0.1, 'dt': 0.05}
+            args_lateral = {'K_P': 0.2680, 'K_I': 0.1340, 'K_D': 0.1786, 'dt': 0.05}
         if args_longitudinal is None:
-            args_longitudinal = {'K_P': 0.3, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05}
+            args_longitudinal = {'K_P': 0.0953, 'K_I': 0.0524, 'K_D': 0.0000, 'dt': 0.05}
 
         self._vehicle = vehicle
         self._max_throt = max_throttle
@@ -351,6 +351,7 @@ class ControlObject(object):
 # Pick the ego vehicle and disable its autopilot so the PID can drive it
 # =============================================================================
 ego_vehicle = random.choice(vehicles)
+print(f"Selected ego vehicle: {ego_vehicle.type_id} (id={ego_vehicle.id})")
 ego_vehicle.set_autopilot(False)
 
 # Camera rig
@@ -382,8 +383,8 @@ TARGET_SPEED = 30.0  # km/h
 
 vehicle_pid = VehiclePIDController(
     ego_vehicle,
-    args_lateral={'K_P': 0.5, 'K_I': 0.01, 'K_D': 0.1, 'dt': 0.05},
-    args_longitudinal={'K_P': 0.3, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05},
+    args_lateral={'K_P': 0.2494, 'K_I': 0.1247, 'K_D': 0.1662, 'dt': 0.05},
+    args_longitudinal={'K_P': 0.3143, 'K_I': 0.1571, 'K_D': 0.0000, 'dt': 0.05},
     max_throttle=0.75,
     max_brake=0.3,
     max_steering=0.8,
@@ -402,7 +403,7 @@ gameDisplay.blit(renderObject.surface, (0, 0))
 pygame.display.flip()
 
 # Load the pre-recorded path (waypoint_x, waypoint_y, vector_x, vector_y)
-data = pd.read_csv("carla_data.csv", index_col=0)
+data = pd.read_csv("src/carla_data.csv", index_col=0)
 wp_x_arr  = data["waypoint_x"].to_numpy()
 wp_y_arr  = data["waypoint_y"].to_numpy()
 vec_x_arr = data["vector_x"].to_numpy()
