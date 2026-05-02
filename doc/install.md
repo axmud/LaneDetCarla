@@ -33,6 +33,8 @@ uv pip install numpy==1.23.1
 
 uv pip install hydra-core==1.3.2
 
+uv pip install control==0.10.2
+
 ```
 
 for all release download:
