@@ -1,31 +1,36 @@
 """
-PID tuning from CARLA system-ID data.
+PID tuning for the HEADING-ERROR controller (look-ahead / pure-pursuit-style).
 
-Pipeline
---------
-1.  Load step-response CSVs produced by carla_sysid.py (or generate synthetic
-    data with --demo so you can preview the workflow without CARLA).
-2.  Identify the longitudinal plant      G_lon(s) = K / (tau s + 1)
-    via nonlinear least-squares on the throttle-step response.
-3.  Identify the effective lateral plant G_lat(s) = (V^2 K_steer) / (L s^2)
-    by fitting K_steer to the steady-state yaw rate of the steer step.
-4.  Compute PID gains analytically by pole placement
-        - Lateral  : (s + wn)^3              -> K_p, K_i, K_d
-        - Longitudinal : (s + wn)^2          -> K_p, K_i  (PI is enough)
-5.  Build closed-loop transfer functions with python-control, plot
-    Bode, step response, root locus, and sensitivity.
-6.  Print copy-pasteable gain dicts for pygame_controller.py.
+How this differs from the cross-track tuner
+-------------------------------------------
+The error signal in your new controller is a small angle (radians) between the
+car's forward vector and the line to a look-ahead target on the path.
+
+That changes the plant model:
+
+    Cross-track formulation:    G(s) = (V^2 * K_steer / L) / s^2     (double int.)
+    Heading-error formulation:  G(s) = (V   * K_steer / L) / s       (single int.)
+
+Why? Steering creates a yaw rate (psi_dot = V*delta/L). The heading error to a
+look-ahead point integrates yaw rate ONCE; to integrate further to a sideways
+position you'd need a second integration. Look-ahead controllers stop at the
+first integration, which is why they're easier to tune.
+
+Consequences:
+  1. A PI controller is enough -- no derivative term needed for stability.
+  2. Gains scale as 1/V (not 1/V^2) -- gain scheduling is much gentler.
+  3. Pole-placement formulas are simpler.
+
+System-ID is the SAME experiment as before (carla_sysid.py): identify K_steer
+from the steady-state yaw rate of a small steer step.
 
 Usage
 -----
-    python pid_tuning.py --demo                      # synthetic data
-    python pid_tuning.py --lon sysid_longitudinal.csv \
-                         --lat sysid_lateral.csv     \
-                         --meta sysid_meta.csv
-
-The tuning bandwidth wn is the main knob you'll want to play with.
-Lower wn  = slower, smoother, more robust.
-Higher wn = faster, snappier, less margin -> can oscillate in the real sim.
+    python pid_tuning_heading.py --demo
+    python pid_tuning_heading.py --lon sysid_longitudinal.csv \
+                                 --lat sysid_lateral.csv \
+                                 --meta sysid_meta.csv \
+                                 --wn-lat 2.0 --wn-lon 1.0
 """
 
 import argparse
@@ -40,7 +45,7 @@ import control as ct
 
 
 # =============================================================================
-# 1. Loading / synthetic data
+# 1. Loading / synthetic data  (identical to the cross-track tuner)
 # =============================================================================
 def load_real(lon_csv, lat_csv, meta_csv):
     lon = pd.read_csv(lon_csv)
@@ -51,33 +56,21 @@ def load_real(lon_csv, lat_csv, meta_csv):
 
 
 def make_synthetic():
-    """
-    Generate plausible CARLA-like step responses so the rest of the pipeline
-    can be exercised end-to-end without a running simulator.
-
-    True parameters (what the fit should recover):
-        K_true   = 80 km/h per unit throttle
-        tau_true = 2.2 s
-        K_steer  = 1.05  (steer command [-1,1] -> roughly 1.05 rad max)
-        L        = 2.875 m   (Tesla Model 3 wheelbase)
-    """
+    """Same synthetic data as the other tuner -- the experiment is identical."""
     dt = 0.05
     L  = 2.875
     K_true, tau_true, K_steer = 80.0, 2.2, 1.05
 
-    # Longitudinal step
     t_lon = np.arange(0.0, 10.0, dt)
     u_lon = 0.5
     v_clean = K_true * u_lon * (1.0 - np.exp(-t_lon / tau_true))
     v_noisy = v_clean + np.random.default_rng(0).normal(0, 0.3, len(t_lon))
     lon = pd.DataFrame({'t': t_lon, 'throttle': u_lon, 'speed_kmh': v_noisy})
 
-    # Lateral step (yaw rate reaches steady state in well under a second)
     t_lat = np.arange(0.0, 2.5, dt)
     V = 30.0 / 3.6
     delta_cmd = 0.05
-    psi_dot_ss = math.degrees(V / L * K_steer * delta_cmd)   # deg/s
-    # crude first-order rise to steady state
+    psi_dot_ss = math.degrees(V / L * K_steer * delta_cmd)
     psi_dot = psi_dot_ss * (1.0 - np.exp(-t_lat / 0.15))
     psi_dot += np.random.default_rng(1).normal(0, 0.2, len(t_lat))
     lat = pd.DataFrame({
@@ -99,20 +92,15 @@ def make_synthetic():
 
 
 # =============================================================================
-# 2. System identification
+# 2. System identification  (identical to before)
 # =============================================================================
 def fit_longitudinal(lon_df, u_step):
-    """
-    Fit  v(t) = K * u_step * (1 - exp(-t/tau))   to the step response.
-    Returns (K, tau).
-    """
     t = lon_df['t'].to_numpy()
     v = lon_df['speed_kmh'].to_numpy()
 
     def model(t, K, tau):
         return K * u_step * (1.0 - np.exp(-t / tau))
 
-    # initial guess from steady-state and 63% rise time
     K0 = v[-1] / u_step if u_step > 0 else 60.0
     try:
         idx63 = np.argmax(v >= 0.63 * v[-1])
@@ -121,77 +109,59 @@ def fit_longitudinal(lon_df, u_step):
         tau0 = 2.0
 
     popt, _ = curve_fit(model, t, v, p0=[K0, tau0], maxfev=5000)
-    K, tau = popt
-    return float(K), float(tau)
+    return float(popt[0]), float(popt[1])
 
 
 def fit_lateral_gain(lat_df, L, delta_cmd):
-    """
-    Fit K_steer from steady-state yaw rate of the steer step.
-        psi_dot_ss = (V / L) * K_steer * delta_cmd
-    -> K_steer = psi_dot_ss * L / (V * delta_cmd)
-
-    We average the last ~25% of the trace as the steady-state estimate.
-    """
     n = len(lat_df)
     tail = lat_df.iloc[int(0.75 * n):]
-    psi_dot_ss = math.radians(tail['yaw_rate_dps'].mean())   # rad/s
-    V = tail['speed_kmh'].mean() / 3.6                       # m/s
+    psi_dot_ss = math.radians(tail['yaw_rate_dps'].mean())
+    V = tail['speed_kmh'].mean() / 3.6
     K_steer = psi_dot_ss * L / (V * delta_cmd)
     return float(K_steer), float(V), float(psi_dot_ss)
 
 
 # =============================================================================
-# 3. PID tuning by pole placement
+# 3. Pole-placement tuning -- HEADING-ERROR formulation
 # =============================================================================
-def tune_lateral(K_lat, wn):
+def tune_lateral_heading(K_lat, wn, zeta=1.0, add_K_D=0.0):
     """
-    Plant: G_lat(s) = K_lat / s^2
-    Controller: C(s) = K_p + K_i/s + K_d s
+    Plant:      G(s) = K_lat / s         (single integrator)
+    Controller: C(s) = K_p + K_i/s       (PI -- D not needed for stability)
 
-    Closed-loop denominator:
-        s^3 + (K_lat K_d) s^2 + (K_lat K_p) s + K_lat K_i
+    Closed-loop denominator: s^2 + K_lat*K_p*s + K_lat*K_i
 
-    Match to (s + wn)^3 = s^3 + 3 wn s^2 + 3 wn^2 s + wn^3:
-        K_d = 3 wn       / K_lat
-        K_p = 3 wn^2     / K_lat
-        K_i =     wn^3   / K_lat
+    Match to s^2 + 2*zeta*wn*s + wn^2:
+        K_p = 2*zeta*wn / K_lat
+        K_i = wn^2      / K_lat
+
+    `add_K_D` lets you optionally include a small D term for noise filtering,
+    matching CARLA's PIDLateralController structure. It does NOT change the
+    pole placement above (the zeta and wn assume PI), so keep it small.
     """
-    K_d = 3.0 * wn        / K_lat
-    K_p = 3.0 * wn * wn   / K_lat
-    K_i = wn * wn * wn    / K_lat
+    K_p = 2.0 * zeta * wn / K_lat
+    K_i = wn * wn         / K_lat
+    K_d = add_K_D
     return {'K_P': K_p, 'K_I': K_i, 'K_D': K_d}
 
 
 def tune_longitudinal(K, tau, wn):
-    """
-    Plant: G_lon(s) = K / (tau s + 1)
-    Use a PI controller C(s) = K_p + K_i/s.
-
-    Closed-loop denominator (after multiplying through by tau s):
-        tau s^2 + (1 + K K_p) s + K K_i
-
-    Normalise by tau and match to (s + wn)^2 = s^2 + 2 wn s + wn^2:
-        K_p = (2 wn tau - 1) / K
-        K_i = (wn^2  * tau)  / K
-    """
+    """Same PI tuning as before -- longitudinal plant unchanged."""
     K_p = (2.0 * wn * tau - 1.0) / K
     K_i = (wn * wn * tau)        / K
     return {'K_P': K_p, 'K_I': K_i, 'K_D': 0.0}
 
 
 # =============================================================================
-# 4. Plotting
+# 4. Plots
 # =============================================================================
 def plot_identification(lon_df, lat_df, K, tau, K_steer, V_lat, L, u_step,
                         delta_cmd, out_path):
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
 
-    # --- longitudinal fit ---
     t = lon_df['t'].to_numpy()
     v_meas = lon_df['speed_kmh'].to_numpy()
-    v_fit  = K * u_step * (1.0 - np.exp(-t / tau))
-
+    v_fit = K * u_step * (1.0 - np.exp(-t / tau))
     ax = axes[0]
     ax.plot(t, v_meas, '.', ms=3, alpha=0.5, label='measured')
     ax.plot(t, v_fit,  '-', lw=2, label=f'fit: K={K:.2f}, τ={tau:.2f} s')
@@ -203,11 +173,9 @@ def plot_identification(lon_df, lat_df, K, tau, K_steer, V_lat, L, u_step,
     ax.legend(loc='lower right')
     ax.grid(True, alpha=0.3)
 
-    # --- lateral steady-state ---
     t = lat_df['t'].to_numpy()
     psi = lat_df['yaw_rate_dps'].to_numpy()
     psi_ss_pred = math.degrees(V_lat / L * K_steer * delta_cmd)
-
     ax = axes[1]
     ax.plot(t, psi, '.', ms=3, alpha=0.5, label='measured ψ̇')
     ax.axhline(psi_ss_pred, color='C1', lw=2,
@@ -218,24 +186,27 @@ def plot_identification(lon_df, lat_df, K, tau, K_steer, V_lat, L, u_step,
     ax.legend(loc='lower right')
     ax.grid(True, alpha=0.3)
 
-    fig.suptitle('System identification', fontsize=13, y=1.02)
+    fig.suptitle('System identification (same experiments as cross-track tuner)',
+                 fontsize=13, y=1.02)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120, bbox_inches='tight')
     plt.close(fig)
 
 
-def plot_lateral_analysis(K_lat, gains, wn, out_path):
+def plot_lateral_heading_analysis(K_lat, gains, wn, out_path):
     K_p, K_i, K_d = gains['K_P'], gains['K_I'], gains['K_D']
     s = ct.tf('s')
-    G = K_lat / s**2
-    C = K_p + K_i / s + K_d * s
-    L_ol = C * G                       # open-loop
-    T = ct.feedback(L_ol, 1)           # closed-loop reference -> output
-    S = 1 / (1 + L_ol)                 # sensitivity
+    G = K_lat / s                         # single integrator!
+    if K_d > 0:
+        C = K_p + K_i / s + K_d * s
+    else:
+        C = K_p + K_i / s
+    L_ol = C * G
+    T = ct.feedback(L_ol, 1)
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
 
-    # Bode of open loop
+    # Bode magnitude
     ax = axes[0, 0]
     w = np.logspace(-2, 2, 500)
     mag, phase, _ = ct.bode(L_ol, w, plot=False)
@@ -244,7 +215,7 @@ def plot_lateral_analysis(K_lat, gains, wn, out_path):
     gm, pm, wg, wp = ct.margin(L_ol)
     pm_str = f'{pm:.1f}°' if np.isfinite(pm) else '∞'
     wp_str = f'{wp:.2f} rad/s' if np.isfinite(wp) else 'n/a'
-    ax.set_title(f'Open-loop Bode (lateral)\n'
+    ax.set_title(f'Open-loop Bode (lateral, heading-error)\n'
                  f'PM={pm_str}, ω_c={wp_str}')
     ax.set_xlabel('ω [rad/s]')
     ax.set_ylabel('|L(jω)| [dB]')
@@ -259,19 +230,19 @@ def plot_lateral_analysis(K_lat, gains, wn, out_path):
     ax.set_ylabel('∠L(jω) [°]')
     ax.grid(True, which='both', alpha=0.3)
 
-    # Closed-loop step response
+    # Step response
     ax = axes[1, 0]
-    t = np.linspace(0, 6, 600)
+    t = np.linspace(0, 5, 600)
     t_out, y = ct.step_response(T, t)
     ax.plot(t_out, y, lw=2, label=f'ω_n = {wn} rad/s')
     ax.axhline(1.0, color='k', ls='--', lw=0.8, alpha=0.5)
-    ax.set_title('Closed-loop step response (cross-track tracking)')
+    ax.set_title('Closed-loop step response\n(heading-error tracking)')
     ax.set_xlabel('time [s]')
-    ax.set_ylabel('e_y / reference')
+    ax.set_ylabel('e_h / reference')
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Root locus
+    # Pole-zero
     ax = axes[1, 1]
     poles = ct.poles(T)
     zeros = ct.zeros(T)
@@ -289,9 +260,10 @@ def plot_lateral_analysis(K_lat, gains, wn, out_path):
     ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='datalim')
 
+    ctrl_type = 'PID' if K_d > 0 else 'PI'
     fig.suptitle(
-        f'Lateral controller analysis  '
-        f'(K_p={K_p:.3f}, K_i={K_i:.3f}, K_d={K_d:.3f})',
+        f'Lateral controller analysis ({ctrl_type}, single integrator plant)\n'
+        f'K_P={K_p:.3f}, K_I={K_i:.3f}, K_D={K_d:.3f}',
         fontsize=13, y=1.00,
     )
     fig.tight_layout()
@@ -309,7 +281,6 @@ def plot_longitudinal_analysis(K, tau, gains, wn, out_path):
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
 
-    # Bode
     ax = axes[0]
     w = np.logspace(-2, 2, 500)
     mag, phase, _ = ct.bode(L_ol, w, plot=False)
@@ -323,7 +294,6 @@ def plot_longitudinal_analysis(K, tau, gains, wn, out_path):
     ax.set_ylabel('|L(jω)| [dB]')
     ax.grid(True, which='both', alpha=0.3)
 
-    # Step
     ax = axes[1]
     t = np.linspace(0, 8, 800)
     t_out, y = ct.step_response(T, t)
@@ -337,7 +307,7 @@ def plot_longitudinal_analysis(K, tau, gains, wn, out_path):
 
     fig.suptitle(
         f'Longitudinal controller analysis  '
-        f'(K_p={K_p:.3f}, K_i={K_i:.3f})',
+        f'(K_P={K_p:.3f}, K_I={K_i:.3f})',
         fontsize=13, y=1.02,
     )
     fig.tight_layout()
@@ -345,27 +315,63 @@ def plot_longitudinal_analysis(K, tau, gains, wn, out_path):
     plt.close(fig)
 
 
-def plot_speed_schedule(K_steer, L, wn, V_range_kmh, out_path):
+def plot_speed_schedule_heading(K_steer, L, wn, V_range_kmh, out_path):
     """
-    Show how the lateral PID gains have to be scheduled with speed,
-    because the plant gain V^2 K_steer / L scales with V^2.
+    Heading-error plant gain scales with V (not V^2), so gains scale with 1/V.
+    Plot this so the user sees that the schedule is gentler than for the
+    cross-track formulation.
     """
     V = np.array(V_range_kmh) / 3.6
-    K_lat = V**2 * K_steer / L
+    K_lat = V * K_steer / L                  # <-- single V, not V^2
 
-    K_d = 3.0 * wn        / K_lat
-    K_p = 3.0 * wn * wn   / K_lat
-    K_i = wn * wn * wn    / K_lat
+    K_p = 2.0 * wn       / K_lat
+    K_i = wn * wn        / K_lat
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.plot(V_range_kmh, K_p, 'o-', label='K_P')
-    ax.plot(V_range_kmh, K_i, 's-', label='K_I')
-    ax.plot(V_range_kmh, K_d, '^-', label='K_D')
+    ax.plot(V_range_kmh, K_p, 'o-', label='K_P  ∝ 1/V')
+    ax.plot(V_range_kmh, K_i, 's-', label='K_I  ∝ 1/V')
     ax.set_xlabel('vehicle speed V [km/h]')
     ax.set_ylabel('gain')
     ax.set_yscale('log')
-    ax.set_title(f'Lateral gain schedule (ω_n = {wn} rad/s)\n'
-                 'gains scale ∝ 1/V² because plant gain scales ∝ V²')
+    ax.set_title(f'Heading-error gain schedule (ω_n = {wn} rad/s)\n'
+                 'gains scale ∝ 1/V (gentler than cross-track\'s 1/V²)')
+    ax.legend()
+    ax.grid(True, which='both', alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120, bbox_inches='tight')
+    plt.close(fig)
+
+
+def plot_comparison_schedule(K_steer, L, wn_heading, wn_xtrack,
+                             V_range_kmh, out_path):
+    """
+    Side-by-side comparison: how aggressively must each formulation re-tune
+    its gains as speed changes?
+    """
+    V = np.array(V_range_kmh) / 3.6
+
+    # Heading-error plant: K_lat = V * K_steer / L
+    K_lat_h = V * K_steer / L
+    K_p_h = 2.0 * wn_heading / K_lat_h
+    # Cross-track plant: K_lat = V^2 * K_steer / L
+    K_lat_x = V**2 * K_steer / L
+    K_p_x = 3.0 * wn_xtrack**2 / K_lat_x
+
+    # Normalise both so they equal 1.0 at 30 km/h
+    i30 = np.argmin(np.abs(np.array(V_range_kmh) - 30.0))
+    K_p_h_n = K_p_h / K_p_h[i30]
+    K_p_x_n = K_p_x / K_p_x[i30]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(V_range_kmh, K_p_h_n, 'o-', label='heading-error (1/V)')
+    ax.plot(V_range_kmh, K_p_x_n, 's-', label='cross-track (1/V²)')
+    ax.axhline(1.0, color='k', lw=0.5, ls='--', alpha=0.5)
+    ax.axvline(30.0, color='k', lw=0.5, ls='--', alpha=0.5)
+    ax.set_xlabel('vehicle speed V [km/h]')
+    ax.set_ylabel('K_P / K_P(at 30 km/h)')
+    ax.set_yscale('log')
+    ax.set_title('Why heading-error is friendlier to gain-schedule\n'
+                 '(K_P normalised to 1.0 at 30 km/h)')
     ax.legend()
     ax.grid(True, which='both', alpha=0.3)
     fig.tight_layout()
@@ -383,10 +389,16 @@ def main():
     p.add_argument('--meta', help='metadata CSV from carla_sysid.py')
     p.add_argument('--demo', action='store_true',
                    help='use synthetic data instead of real CSVs')
-    p.add_argument('--wn-lat', type=float, default=1.5,
-                   help='lateral closed-loop bandwidth [rad/s] (default 1.5)')
+    p.add_argument('--wn-lat', type=float, default=2.0,
+                   help='lateral closed-loop bandwidth [rad/s] (default 2.0). '
+                        'Heading-error tolerates higher ω_n than cross-track.')
     p.add_argument('--wn-lon', type=float, default=1.0,
                    help='longitudinal closed-loop bandwidth [rad/s] (default 1.0)')
+    p.add_argument('--zeta', type=float, default=1.0,
+                   help='lateral damping ratio (default 1.0 = critical)')
+    p.add_argument('--add-Kd', type=float, default=0.0,
+                   help='optional small K_D for noise filtering '
+                        '(matches CARLA structure; default 0.0)')
     p.add_argument('--target-speed', type=float, default=30.0,
                    help='speed [km/h] at which to evaluate the lateral gains')
     p.add_argument('--outdir', default='.')
@@ -400,9 +412,9 @@ def main():
     else:
         lon_df, lat_df, meta = load_real(args.lon, args.lat, args.meta)
 
-    L          = meta['wheelbase_m']
-    u_step     = meta['lon_throttle_step']
-    delta_cmd  = meta['lat_steer_step']
+    L         = meta['wheelbase_m']
+    u_step    = meta['lon_throttle_step']
+    delta_cmd = meta['lat_steer_step']
 
     # --- ID ---
     K, tau = fit_longitudinal(lon_df, u_step)
@@ -413,14 +425,16 @@ def main():
 
     # --- Tune ---
     V_target = args.target_speed / 3.6
-    K_lat_at_target = V_target**2 * K_steer / L
-    lat_gains = tune_lateral(K_lat_at_target, args.wn_lat)
+    K_lat_at_target = V_target * K_steer / L           # <-- single V
+    lat_gains = tune_lateral_heading(
+        K_lat_at_target, args.wn_lat, args.zeta, args.add_Kd
+    )
     lon_gains = tune_longitudinal(K, tau, args.wn_lon)
 
     print()
     print(f'[tune] Lateral plant gain @ {args.target_speed} km/h: '
-          f'V²·K_steer/L = {K_lat_at_target:.3f}')
-    print(f'[tune] Lateral PID  (ω_n = {args.wn_lat} rad/s):')
+          f'V·K_steer/L = {K_lat_at_target:.3f}  (single integrator)')
+    print(f'[tune] Lateral PI/PID  (ω_n = {args.wn_lat} rad/s, ζ = {args.zeta}):')
     print(f"         args_lateral = {{'K_P': {lat_gains['K_P']:.4f}, "
           f"'K_I': {lat_gains['K_I']:.4f}, "
           f"'K_D': {lat_gains['K_D']:.4f}, 'dt': 0.05}}")
@@ -432,19 +446,24 @@ def main():
     # --- Plots ---
     plot_identification(
         lon_df, lat_df, K, tau, K_steer, V_lat, L, u_step, delta_cmd,
-        os.path.join(args.outdir, 'fig1_identification.png'),
+        os.path.join(args.outdir, 'src/heading_error_pid/fig1_identification.png'),
     )
-    plot_lateral_analysis(
+    plot_lateral_heading_analysis(
         K_lat_at_target, lat_gains, args.wn_lat,
-        os.path.join(args.outdir, 'fig2_lateral_analysis.png'),
+        os.path.join(args.outdir, 'src/heading_error_pid/fig2_lateral_heading_analysis.png'),
     )
     plot_longitudinal_analysis(
         K, tau, lon_gains, args.wn_lon,
-        os.path.join(args.outdir, 'fig3_longitudinal_analysis.png'),
+        os.path.join(args.outdir, 'src/heading_error_pid/fig3_longitudinal_analysis.png'),
     )
-    plot_speed_schedule(
+    plot_speed_schedule_heading(
         K_steer, L, args.wn_lat, [10, 20, 30, 50, 70, 90, 110],
-        os.path.join(args.outdir, 'fig4_gain_schedule.png'),
+        os.path.join(args.outdir, 'src/heading_error_pid/fig4_gain_schedule_heading.png'),
+    )
+    plot_comparison_schedule(
+        K_steer, L, args.wn_lat, args.wn_lat,
+        [10, 20, 30, 50, 70, 90, 110],
+        os.path.join(args.outdir, 'src/heading_error_pid/fig5_comparison.png'),
     )
     print(f'\n[done] Plots written to {args.outdir}/')
 

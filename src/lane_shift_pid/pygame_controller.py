@@ -418,7 +418,7 @@ TARGET_SPEED = 30.0  # km/h
 # Trajectory logging config
 # =============================================================================
 LOG_TRAJECTORY     = False                   # master on/off switch
-LOG_OUTPUT_PATH    = "src/ego_trajectory_in_pid_lane_shift.csv"
+LOG_OUTPUT_PATH    = "src/lane_shift_pid/ego_trajectory.csv"
 LOG_TOGGLE_KEY     = pygame.K_l             # press 'L' in the PyGame window
 
 vehicle_pid = VehiclePIDController(
