@@ -400,7 +400,7 @@ class ControlObject(object):
 
 
 class TrajectoryLogger:
-    def __init__(self, enabled=True, output_path="ego_trajectory.csv"):
+    def __init__(self, enabled=True, output_path="ego_trajectory_heading.csv"):
         self.enabled = enabled
         self.output_path = output_path
         self._rows = []
@@ -467,7 +467,7 @@ TARGET_SPEED = 30.0  # km/h
 # Trajectory logging config
 # =============================================================================
 LOG_TRAJECTORY     = True                   # master on/off switch
-LOG_OUTPUT_PATH    = "src/heading_error_pid/ego_trajectory.csv"
+LOG_OUTPUT_PATH    = "src/heading_error_pid/ego_trajectory_heading.csv"
 LOG_TOGGLE_KEY     = pygame.K_l             # press 'L' in the PyGame window
 
 

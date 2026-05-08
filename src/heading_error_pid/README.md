@@ -15,5 +15,5 @@ python src\draw_trajectory_in_carla.py --log src\heading_error_pid\ego_trajector
 for drawing the results:
 
 ```cmd
-python src\plot_trajectory.py --logs src\heading_error_pid\ego_trajectory.csv
+python src\plot_trajectory.py --logs src\heading_error_pid\ego_trajectory_heading.csv
 ```
