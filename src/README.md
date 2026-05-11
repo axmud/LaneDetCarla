@@ -15,5 +15,4 @@ python src\draw_trajectory_in_carla.py --logs src\lane_shift_pid\ego_trajectory_
 or if you want to plot it:
 
 ```cmd
-python src\plot_trajectory.py --logs src\lane_shift_pid\ego_trajectory_shift.csv src\heading_error_pid\ego_trajectory_heading.csv
-```
+python src\plot_trajectory.py --logs src\lane_shift_pid\ego_trajectory_shift.csv src\heading_error_pid\ego_trajectory_heading.csv src\ego_trajectory_vision.csv```

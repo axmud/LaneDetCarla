@@ -673,7 +673,7 @@ controlObject = ControlObject(ego_vehicle)
 TARGET_SPEED = 30.0  # km/h
 
 LOG_TRAJECTORY  = True
-LOG_OUTPUT_PATH = "src/heading_error_pid/ego_trajectory_heading.csv"
+LOG_OUTPUT_PATH = "src/ego_trajectory_vision.csv"
 LOG_TOGGLE_KEY  = pygame.K_l
 
 vehicle_pid = VehiclePIDController(
