@@ -66,7 +66,7 @@ def draw_endpoints(world, xs, ys, life_time):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--logs", nargs="+", default=["src\ego_trajectory_in_pid_lane_shift.csv"],
+    parser.add_argument("--logs", nargs="+", default=["src/ego_trajectory_vision.csv"],
                         help="One or more trajectory CSVs to overlay")
     parser.add_argument("--ref", default="src/carla_data.csv",
                         help="Reference path CSV")

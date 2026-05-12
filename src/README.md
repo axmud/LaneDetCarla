@@ -9,10 +9,11 @@ python pid_tuning.py --lon sysid_longitudinal.csv --lat sysid_lateral.csv --meta
 you can check the results in carla itself using this command:
 
 ```cmd
-python src\draw_trajectory_in_carla.py --logs src\lane_shift_pid\ego_trajectory_shift.csv src\heading_error_pid\ego_trajectory_heading.csv
+python src\draw_trajectory_in_carla.py --logs src\lane_shift_pid\ego_trajectory_shift.csv src\heading_error_pid\ego_trajectory_heading.csv src\ego_trajectory_vision.csv
 ```
 
 or if you want to plot it:
 
 ```cmd
-python src\plot_trajectory.py --logs src\lane_shift_pid\ego_trajectory_shift.csv src\heading_error_pid\ego_trajectory_heading.csv src\ego_trajectory_vision.csv```
+python src\plot_trajectory.py --logs src\lane_shift_pid\ego_trajectory_shift.csv src\heading_error_pid\ego_trajectory_heading.csv src\ego_trajectory_vision.csv
+```
